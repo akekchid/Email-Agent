@@ -1,0 +1,4 @@
+[submodule "agent-chat-ui"]
+	path = agent-chat-ui
+	url = git@github.com:akekchid/agent-chat-ui.git
+	branch = main
