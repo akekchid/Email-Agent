@@ -13,12 +13,26 @@ load_dotenv()
 
 @dataclass
 class EmailContext:
-    email_address: str = "julie@example.com"
-    password: str = "password123"
+    user_id: str
 
 
 class AuthenticatedState(AgentState):
     authenticated: bool
+
+
+@tool
+def search_emails(query: str, runtime: ToolRuntime) -> list[dict]:
+    """Search the authenticated user's Gmail mailbox."""
+
+    client = runtime.context.gmail_client
+
+    messages = client.list_messages(
+        query=query,
+        max_results=10,
+    )
+
+    return messages
+
 
 
 @tool
@@ -75,6 +89,26 @@ async def dynamic_tool_call(
 
     request = request.override(tools=tools)
     return await handler(request)
+
+    # user_id = request.context.user_id
+    # gmail_connected = credential_store.has_google_credentials(user_id)
+
+    # if gmail_connected:
+    #     tools = [
+    #         search_emails,
+    #         get_email,
+    #         create_email_draft,
+    #     ]
+    # else:
+    #     tools = [
+    #         connect_gmail,
+    #      ]
+
+    # return await handler(
+    #     request.override(tools=tools)
+    # )
+
+
 
 
 authenticated_prompt = "You are a helpful assistant that can check the inbox and send emails."
