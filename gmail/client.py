@@ -1,5 +1,7 @@
 
 from googleapiclient.discovery import build
+from gmail.models import GmailMessage
+from gmail.parser import parse_message
 
 
 class GmailClient:
@@ -10,7 +12,7 @@ class GmailClient:
             credentials=credentials
         )
 
-    def list_messages(self, query: str | None = None, max_results: int = 10):
+    def search_messages(self, query: str, max_results: int = 10):
         result = (
             self.service.users()
             .messages()
@@ -24,10 +26,7 @@ class GmailClient:
 
         return result.get("messages", [])
 
-    def parse_gmail_message(raw) -> EmailMessage:
-        pass
-
-    def get_message(self, message_id: str) -> EmailMessage:
+    def get_message(self, message_id: str) -> GmailMessage:
         raw = (
             self.service.users()
             .messages()
@@ -39,11 +38,10 @@ class GmailClient:
             .execute()
         )
 
-        return self.parse_gmail_message(raw)
+        return parse_message(raw)
 
-    def get_thread(self, thread_id):
-        pass
-
-    def send_message(self, to, subject, body):
-        pass
-
+    # get_thread()
+    # create_draft()
+    # send_draft()
+    # archive_message()
+    # add_label()
