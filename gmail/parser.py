@@ -1,7 +1,33 @@
 import base64
-from email.message import Message
+import html
+import re
 
+
+from datetime import datetime, timezone
+from email.utils import parseaddr
+
+from email.message import Message
 from gmail.models import GmailMessage
+
+def parse_timestamp(timestamp: str) -> datetime:
+    return datetime.fromtimestamp(
+        int(timestamp) / 1000,
+        tz=timezone.utc,
+    )
+
+def clean_email_body(body: str) -> str:
+    body = html.unescape(body)
+
+    body = body.replace("\xa0", " ")
+    body = body.replace("\r\n", "\n")
+
+    # Collapse excesive spaces/tabs
+    body = re.sub(r"[\t]+", " ", body)
+
+    # Collapse excessive blank lines
+    body = re.sub(r"\n{3,}", "\n\n", body)
+
+    return body.strip()
 
 
 def extract_body(payload: dict) -> str:
@@ -45,14 +71,16 @@ def parse_message(raw_message: dict) -> GmailMessage:
     }
 
     body = extract_body(raw_message["payload"])
+    body = clean_email_body(body)
 
     return GmailMessage(
         id=raw_message["id"],
         thread_id=raw_message["threadId"],
-        sender=header_map.get("from", ""),
+        sender_name=parseaddr(header_map.get("from", ""))[0],
+        sender_email=parseaddr(header_map.get("from", ""))[1],
         recipient=header_map.get("to", ""),
         subject=header_map.get("subject", ""),
         body=body,
-        timestamp=raw_message.get("internalDate", ""),
-
+        timestamp=parse_timestamp(raw_message["internalDate"]),
+    
     )
