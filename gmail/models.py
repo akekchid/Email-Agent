@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 @dataclass
-class EmailMessage:
+class GmailMessage:
     id: str
     thread_id: str
     sender: str
