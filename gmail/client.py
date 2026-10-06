@@ -13,6 +13,7 @@ class GmailClient:
         )
 
     def search_messages(self, query: str, max_results: int = 10):
+        """Search for Gmail messages matching the given query."""
         result = (
             self.service.users()
             .messages()
@@ -27,6 +28,7 @@ class GmailClient:
         return result.get("messages", [])
 
     def get_message(self, message_id: str) -> GmailMessage:
+        """Retrieve a Gmail message by its ID."""
         raw = (
             self.service.users()
             .messages()
@@ -40,7 +42,30 @@ class GmailClient:
 
         return parse_message(raw)
 
-    # get_thread()
+    def get_thread(self, thread_id: str) -> list[GmailMessage]:
+        """Retrieve all messages in a Gmail thread by its ID."""
+        raw_thread = (
+            self.service.users()
+            .threads()
+            .get(
+                userId="me",
+                id=thread_id,
+                format="full",
+            )
+            .execute()
+        )
+
+        messages = [
+            parse_message(raw)
+            for raw in raw_thread.get("messages", [])
+        ]
+
+        return sorted(
+            messages,
+            key=lambda message: message.timestamp,
+        )    
+
+
     # create_draft()
     # send_draft()
     # archive_message()
