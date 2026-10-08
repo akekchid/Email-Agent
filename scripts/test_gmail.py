@@ -41,6 +41,7 @@ def get_credentials():
 
 
 def main():
+    """ Main function to test Gmail API integration by fetching and displaying recent messages. """
     creds = get_credentials()
 
     try:
