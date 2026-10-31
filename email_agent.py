@@ -153,12 +153,6 @@ def get_email_thread(
     # )
 
 
-
-
-# authenticated_prompt = "You are a helpful assistant that can check the inbox and send emails."
-# unauthenticated_prompt = "You are a helpful assistant that can authenticate users."
-
-
 # @dynamic_prompt
 # def dynamic_prompt_func(request: ModelRequest) -> str:
 #     """Generate system prompt based on authentication status"""
