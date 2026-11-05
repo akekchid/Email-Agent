@@ -13,3 +13,13 @@ class GmailMessage:
     subject: str
     body: str
     timestamp: datetime
+
+
+@dataclass
+class GmailDraft:
+    id: str
+    message_id: str
+    thread_id: str
+    to: str
+    subject: str
+    body: str
