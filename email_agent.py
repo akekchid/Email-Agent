@@ -94,6 +94,39 @@ def get_email_thread(
 
     return [serialize_message(message) for message in messages]
 
+@tool
+def create_email_draft(
+    to: str,
+    subject: str,
+    body: str,
+    runtime: ToolRuntime[EmailContext],
+    thread_id: str | None = None,
+) -> dict:
+    """Create an unsent Gmail draft.
+    
+    Use thread_id when replying to an existing
+    email conversation.
+    """
+
+    gmail = runtime.context.gmail_client
+
+    draft = gmail.create_draft(
+        to=to,
+        subject=subject,
+        body=body,
+        thread_id=thread_id,
+    )
+
+    return {
+        "draft_id": draft.id,
+        "message_id": draft.message_id,
+        "thread_id": draft.thread_id,
+        "to": draft.to,
+        "subject": draft.subject,
+        "body": draft.body,
+        "status": "draft_created",
+    }
+
 
 # @tool
 # def authenticate(email: str, password: str, runtime: ToolRuntime) -> Command:
@@ -166,6 +199,6 @@ def get_email_thread(
 
 email_agent = create_agent(
         "gpt-5-nano",
-        tools=[search_emails, get_email, get_email_thread],
+        tools=[search_emails, get_email, get_email_thread, create_email_draft],
         context_schema=EmailContext,
     )
