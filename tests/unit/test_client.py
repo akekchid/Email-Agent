@@ -3,13 +3,15 @@
 import base64
 import unittest
 from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
 from unittest.mock import Mock, call, patch, sentinel
 
 from googleapiclient.errors import HttpError
 from httplib2 import Response
 
 from gmail.client import GmailClient
-from gmail.models import GmailMessage
+from gmail.models import GmailDraft, GmailMessage
 
 
 class GmailClientTests(unittest.TestCase):
@@ -20,7 +22,205 @@ class GmailClientTests(unittest.TestCase):
         self.build.return_value.users.return_value.messages.return_value = self.messages
         self.threads = Mock(spec=["get"])
         self.build.return_value.users.return_value.threads.return_value = self.threads
+        self.drafts = Mock(spec=["create"])
+        self.build.return_value.users.return_value.drafts.return_value = self.drafts
+        self.drafts.create.return_value.execute.return_value = {
+            "id": "draft-1", "message": {"id": "draft-message-1", "threadId": "thread-1"},
+        }
         self.client = GmailClient(sentinel.credentials)
+
+    def decoded_draft(self):
+        self.drafts.create.assert_called_once()
+        kwargs = self.drafts.create.call_args.kwargs
+        self.assertEqual(kwargs["userId"], "me")
+        encoded = kwargs["body"]["message"]
+        message = BytesParser(policy=policy.default).parsebytes(
+            base64.urlsafe_b64decode(encoded["raw"]),
+        )
+        return encoded, message
+
+    def reply_metadata(self):
+        return {"messages": [
+            {
+                "internalDate": "1000",
+                "payload": {"headers": [
+                    {"name": "Message-ID", "value": "<latest@example.com>"},
+                    {"name": "Subject", "value": "Coffee"},
+                    {"name": "From", "value": "Jane <jane@example.com>"},
+                    {"name": "References", "value": "<original@example.com>"},
+                ]},
+            },
+            {
+                "internalDate": "900",
+                "payload": {"headers": [
+                    {"name": "Message-ID", "value": "<original@example.com>"},
+                    {"name": "Subject", "value": "Coffee"},
+                ]},
+            },
+        ]}
+
+    def test_create_draft_encodes_unicode_content_and_returns_draft(self):
+        result = self.client.create_draft("Jane <jane@example.com>", "Café ☕", "Hi Jane,\nCoffee tomorrow? ☕")
+
+        encoded, message = self.decoded_draft()
+        self.assertEqual(set(encoded), {"raw"})
+        self.assertEqual(str(message["To"]), "Jane <jane@example.com>")
+        self.assertEqual(str(message["Subject"]), "Café ☕")
+        self.assertEqual(message.get_content_type(), "text/plain")
+        self.assertEqual(message.get_content(), "Hi Jane,\r\nCoffee tomorrow? ☕\r\n")
+        self.assertIsNone(message["In-Reply-To"])
+        self.threads.get.assert_not_called()
+        self.drafts.create.return_value.execute.assert_called_once_with()
+        self.assertEqual(result, GmailDraft(
+            id="draft-1", message_id="draft-message-1", thread_id="thread-1",
+            to="Jane <jane@example.com>", subject="Café ☕", body="Hi Jane,\nCoffee tomorrow? ☕",
+        ))
+
+    def test_create_draft_sets_reply_headers_from_latest_message(self):
+        self.threads.get.return_value.execute.return_value = self.reply_metadata()
+
+        self.client.create_draft("jane@example.com", "Coffee", "Sounds good!", thread_id="thread-1")
+
+        encoded, message = self.decoded_draft()
+        self.assertEqual(encoded["threadId"], "thread-1")
+        self.assertEqual(message["In-Reply-To"], "<latest@example.com>")
+        self.assertEqual(message["References"], "<original@example.com> <latest@example.com>")
+        self.threads.get.assert_called_once_with(
+            userId="me", id="thread-1", format="metadata",
+            metadataHeaders=["Message-ID", "References", "In-Reply-To", "Subject", "From", "Reply-To"],
+        )
+
+    def test_create_draft_prefers_reply_to_and_preserves_supplied_recipient(self):
+        metadata = self.reply_metadata()
+        metadata["messages"][0]["payload"]["headers"].append(
+            {"name": "rEpLy-To", "value": "Coffee Team <coffee@example.com>"},
+        )
+        self.threads.get.return_value.execute.return_value = metadata
+
+        result = self.client.create_draft("Team <COFFEE@example.com>", "Coffee", "Yes", "thread-1")
+
+        _, message = self.decoded_draft()
+        self.assertEqual(str(message["To"]), "Team <COFFEE@example.com>")
+        self.assertEqual(result.to, "Team <COFFEE@example.com>")
+
+    def test_create_draft_rejects_from_when_reply_to_is_present(self):
+        metadata = self.reply_metadata()
+        metadata["messages"][0]["payload"]["headers"].append(
+            {"name": "Reply-To", "value": "coffee@example.com"},
+        )
+        self.threads.get.return_value.execute.return_value = metadata
+
+        with self.assertRaisesRegex(ValueError, "coffee@example.com"):
+            self.client.create_draft("jane@example.com", "Coffee", "Yes", "thread-1")
+        self.drafts.create.assert_not_called()
+
+    def test_create_draft_rejects_wrong_or_additional_reply_recipients(self):
+        self.threads.get.return_value.execute.return_value = self.reply_metadata()
+        for to in ("other@example.com", "jane@example.com, other@example.com"):
+            with self.subTest(to=to), self.assertRaisesRegex(ValueError, "jane@example.com"):
+                self.client.create_draft(to, "Coffee", "Yes", "thread-1")
+        self.drafts.create.assert_not_called()
+
+    def test_create_draft_accepts_multiple_reply_to_addresses_in_any_order(self):
+        metadata = self.reply_metadata()
+        metadata["messages"][0]["payload"]["headers"].append({
+            "name": "Reply-To", "value": "Jane <jane@example.com>, Team <coffee@example.com>",
+        })
+        self.threads.get.return_value.execute.return_value = metadata
+
+        self.client.create_draft("coffee@example.com, jane@example.com", "Coffee", "Yes", "thread-1")
+
+        self.drafts.create.assert_called_once()
+
+    def test_create_draft_rejects_missing_or_invalid_reply_metadata(self):
+        for reply_to in (None, "", "not-an-address", "Jane <broken"):
+            with self.subTest(reply_to=reply_to):
+                metadata = self.reply_metadata()
+                headers = metadata["messages"][0]["payload"]["headers"]
+                if reply_to is None:
+                    headers[:] = [header for header in headers if header["name"] != "From"]
+                else:
+                    headers.append({"name": "Reply-To", "value": reply_to})
+                self.threads.get.return_value.execute.return_value = metadata
+                with self.assertRaises(ValueError):
+                    self.client.create_draft("jane@example.com", "Coffee", "Yes", "thread-1")
+        self.drafts.create.assert_not_called()
+
+    def test_create_draft_rejects_malformed_intended_recipient(self):
+        self.threads.get.return_value.execute.return_value = self.reply_metadata()
+        with self.assertRaises(ValueError):
+            self.client.create_draft("Jane <jane@example.com", "Coffee", "Yes", "thread-1")
+        self.drafts.create.assert_not_called()
+
+    def test_create_draft_does_not_treat_outgoing_sender_as_reply_recipient(self):
+        for label in ("SENT", "DRAFT"):
+            with self.subTest(label=label):
+                metadata = self.reply_metadata()
+                parent = metadata["messages"][0]
+                parent["labelIds"] = [label]
+                for header in parent["payload"]["headers"]:
+                    if header["name"] == "From":
+                        header["value"] = "me@example.com"
+                self.threads.get.return_value.execute.return_value = metadata
+
+                result = self.client.create_draft("jane@example.com", "Coffee", "Yes", "thread-1")
+
+                self.assertEqual(result.to, "jane@example.com")
+        self.assertEqual(self.drafts.create.call_count, 2)
+
+    def test_create_draft_supports_parent_without_references(self):
+        metadata = self.reply_metadata()
+        metadata["messages"][0]["payload"]["headers"].pop()
+        self.threads.get.return_value.execute.return_value = metadata
+
+        self.client.create_draft("jane@example.com", "Coffee", "Yes", thread_id="thread-1")
+
+        _, message = self.decoded_draft()
+        self.assertEqual(message["References"], "<latest@example.com>")
+
+    def test_create_draft_rejects_unusable_thread_before_creating(self):
+        missing_id = self.reply_metadata()
+        missing_id["messages"][0]["payload"]["headers"].pop(0)
+        for metadata, subject in (({}, "Coffee"), (missing_id, "Coffee"), (self.reply_metadata(), "Other topic")):
+            with self.subTest(metadata=metadata, subject=subject):
+                self.threads.get.return_value.execute.return_value = metadata
+                with self.assertRaises(ValueError):
+                    self.client.create_draft("jane@example.com", subject, "Hi", thread_id="thread-1")
+                self.drafts.create.assert_not_called()
+
+    def test_create_draft_allows_empty_subject_and_body(self):
+        result = self.client.create_draft("jane@example.com", "", "")
+
+        _, message = self.decoded_draft()
+        self.assertEqual(str(message["Subject"]), "")
+        self.assertEqual(message.get_content(), "\r\n")
+        self.assertEqual(result.body, "")
+
+    def test_create_draft_rejects_header_injection(self):
+        for to, subject in (("jane@example.com\r\nBcc: other@example.com", "Hi"),
+                            ("jane@example.com", "Hi\nBcc: other@example.com")):
+            with self.subTest(to=to, subject=subject), self.assertRaises(ValueError):
+                self.client.create_draft(to, subject, "Hello")
+        self.drafts.create.assert_not_called()
+
+    def test_create_draft_propagates_api_errors(self):
+        error = HttpError(Response({"status": "403"}), b'{"error": {"message": "Forbidden"}}')
+        self.drafts.create.return_value.execute.side_effect = error
+
+        with self.assertRaises(HttpError) as raised:
+            self.client.create_draft("jane@example.com", "Coffee", "Hello")
+
+        self.assertIs(raised.exception, error)
+
+    def test_create_draft_does_not_create_when_thread_lookup_fails(self):
+        error = HttpError(Response({"status": "404"}), b'{"error": {"message": "Not found"}}')
+        self.threads.get.return_value.execute.side_effect = error
+
+        with self.assertRaises(HttpError) as raised:
+            self.client.create_draft("jane@example.com", "Coffee", "Hello", thread_id="missing")
+
+        self.assertIs(raised.exception, error)
+        self.drafts.create.assert_not_called()
 
     def test_builds_gmail_service_with_supplied_credentials(self):
         self.build.assert_called_once_with("gmail", "v1", credentials=sentinel.credentials)
