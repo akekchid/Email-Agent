@@ -23,3 +23,9 @@ class GmailDraft:
     to: str
     subject: str
     body: str
+
+@dataclass
+class SentEmail:
+    message_id: str
+    thread_id: str
+

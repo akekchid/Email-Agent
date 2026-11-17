@@ -3,7 +3,7 @@ from email.message import EmailMessage
 from email.policy import SMTP
 
 from googleapiclient.discovery import build
-from gmail.models import GmailDraft, GmailMessage
+from gmail.models import GmailDraft, GmailMessage, SentEmail
 from gmail.parser import parse_message
 
 
@@ -149,6 +149,31 @@ class GmailClient:
             body=body,
         )
 
-    # send_draft()
+    def send_draft(self, draft_id: str) -> SentEmail:
+        """Send an existing Gmail draft.
+        
+        Requires prior approval at the application layer.
+        Returns the newly created sent message.
+        """
+
+        if not draft_id:
+            raise ValueError("draft_id cannot be empty")
+
+        result = (
+            self.service.users()
+            .drafts()
+            .send(
+                userId="me",
+                body={"id": draft_id},
+            )
+            .execute()
+        )
+
+        return SentEmail(
+            message_id=result["id"],
+            thread_id=result["threadId"],
+        )
+
+
     # archive_message()
     # add_label()
